@@ -447,40 +447,46 @@ function unregister_taxonomy( $taxonomy ) {
 }
 
 /**
- * Builds an object with all taxonomy labels out of a taxonomy object
- *
- * Accepted keys of the label array in the taxonomy object:
- *
- * - name - general name for the taxonomy, usually plural. The same as and overridden by $tax->label. Default is Tags/Categories
- * - singular_name - name for one object of this taxonomy. Default is Tag/Category
- * - search_items - Default is Search Tags/Search Categories
- * - popular_items - This string isn't used on hierarchical taxonomies. Default is Popular Tags
- * - all_items - Default is All Tags/All Categories
- * - parent_item - This string isn't used on non-hierarchical taxonomies. In hierarchical ones the default is Parent Category
- * - parent_item_colon - The same as `parent_item`, but with colon `:` in the end
- * - edit_item - Default is Edit Tag/Edit Category
- * - view_item - Default is View Tag/View Category
- * - update_item - Default is Update Tag/Update Category
- * - add_new_item - Default is Add New Tag/Add New Category
- * - new_item_name - Default is New Tag Name/New Category Name
- * - separate_items_with_commas - This string isn't used on hierarchical taxonomies. Default is "Separate tags with commas", used in the meta box.
- * - add_or_remove_items - This string isn't used on hierarchical taxonomies. Default is "Add or remove tags", used in the meta box when JavaScript is disabled.
- * - choose_from_most_used - This string isn't used on hierarchical taxonomies. Default is "Choose from the most used tags", used in the meta box.
- * - not_found - Default is "No tags found"/"No categories found", used in the meta box and taxonomy list table.
- * - no_terms - Default is "No tags"/"No categories", used in the posts and media list tables.
- * - items_list_navigation - String for the table pagination hidden heading.
- * - items_list - String for the table hidden heading.
- *
- * Above, the first default value is for non-hierarchical taxonomies (like tags) and the second one is for hierarchical taxonomies (like categories).
- *
- * @todo Better documentation for the labels array.
+ * Builds an object with all taxonomy labels out of a taxonomy object.
  *
  * @since 3.0.0
  * @since 4.3.0 Added the `no_terms` label.
  * @since 4.4.0 Added the `items_list_navigation` and `items_list` labels.
  *
  * @param WP_Taxonomy $tax Taxonomy object.
- * @return object object with all the labels as member variables.
+ * @return object {
+ *     Taxonomy labels object. The first default value is for non-hierarchical taxonomies
+ *     (like tags) and the second one is for hierarchical taxonomies (like categories).
+ *
+ *     @type string $name                       General name for the taxonomy, usually plural. The same
+ *                                              as and overridden by `$tax->label`. Default 'Tags'/'Categories'.
+ *     @type string $singular_name              Name for one object of this taxonomy. Default 'Tag'/'Category'.
+ *     @type string $search_items               Default 'Search Tags'/'Search Categories'.
+ *     @type string $popular_items              This label is only used for non-hierarchical taxonomies.
+ *                                              Default 'Popular Tags'.
+ *     @type string $all_items                  Default 'All Tags'/'All Categories'.
+ *     @type string $parent_item                This label is only used for hierarchical taxonomies. Default
+ *                                              'Parent Category'.
+ *     @type string $parent_item_colon          The same as `parent_item`, but with colon `:` in the end.
+ *     @type string $edit_item                  Default 'Edit Tag'/'Edit Category'.
+ *     @type string $view_item                  Default 'View Tag'/'View Category'.
+ *     @type string $update_item                Default 'Update Tag'/'Update Category'.
+ *     @type string $add_new_item               Default 'Add New Tag'/'Add New Category'.
+ *     @type string $new_item_name              Default 'New Tag Name'/'New Category Name'.
+ *     @type string $separate_items_with_commas This label is only used for non-hierarchical taxonomies. Default
+ *                                              'Separate tags with commas', used in the meta box.
+ *     @type string $add_or_remove_items        This label is only used for non-hierarchical taxonomies. Default
+ *                                              'Add or remove tags', used in the meta box when JavaScript
+ *                                              is disabled.
+ *     @type string $choose_from_most_used      This label is only used on non-hierarchical taxonomies. Default
+ *                                              'Choose from the most used tags', used in the meta box.
+ *     @type string $not_found                  Default 'No tags found'/'No categories found', used in
+ *                                              the meta box and taxonomy list table.
+ *     @type string $no_terms                   Default 'No tags'/'No categories', used in the posts and media
+ *                                              list tables.
+ *     @type string $items_list_navigation      Label for the table pagination hidden heading.
+ *     @type string $items_list                 Label for the table hidden heading.
+ * }
  */
 function get_taxonomy_labels( $tax ) {
 	$tax->labels = (array) $tax->labels;
@@ -650,7 +656,17 @@ function get_objects_in_term( $term_ids, $taxonomies, $args = array() ) {
 	$taxonomies = "'" . implode( "', '", array_map( 'esc_sql', $taxonomies ) ) . "'";
 	$term_ids = "'" . implode( "', '", $term_ids ) . "'";
 
-	$object_ids = $wpdb->get_col("SELECT tr.object_id FROM $wpdb->term_relationships AS tr INNER JOIN $wpdb->term_taxonomy AS tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN ($taxonomies) AND tt.term_id IN ($term_ids) ORDER BY tr.object_id $order");
+	$sql = "SELECT tr.object_id FROM $wpdb->term_relationships AS tr INNER JOIN $wpdb->term_taxonomy AS tt ON tr.term_taxonomy_id = tt.term_taxonomy_id WHERE tt.taxonomy IN ($taxonomies) AND tt.term_id IN ($term_ids) ORDER BY tr.object_id $order";
+
+	$last_changed = wp_cache_get_last_changed( 'terms' );
+	$cache_key = 'get_objects_in_term:' . md5( $sql ) . ":$last_changed";
+	$cache = wp_cache_get( $cache_key, 'terms' );
+	if ( false === $cache ) {
+		$object_ids = $wpdb->get_col( $sql );
+		wp_cache_set( $cache_key, $object_ids, 'terms' );
+	} else {
+		$object_ids = (array) $cache;
+	}
 
 	if ( ! $object_ids ){
 		return array();
@@ -833,6 +849,15 @@ function get_term_by( $field, $value, $taxonomy = '', $output = OBJECT, $filter 
 	// 'term_taxonomy_id' lookups don't require taxonomy checks.
 	if ( 'term_taxonomy_id' !== $field && ! taxonomy_exists( $taxonomy ) ) {
 		return false;
+	}
+
+	// No need to perform a query for empty 'slug' or 'name'.
+	if ( 'slug' === $field || 'name' === $field ) {
+		$value = (string) $value;
+
+		if ( 0 === strlen( $value ) ) {
+			return false;
+		}
 	}
 
 	if ( 'id' === $field || 'term_id' === $field ) {
@@ -1020,76 +1045,11 @@ function get_term_to_edit( $id, $taxonomy ) {
  * @global wpdb  $wpdb WordPress database abstraction object.
  * @global array $wp_filter
  *
- * @param array|string $args {
- *     Optional. Array or string of arguments to get terms.
- *
- *     @type string|array $taxonomy               Taxonomy name, or array of taxonomies, to which results should
- *                                                be limited.
- *     @type string       $orderby                Field(s) to order terms by. Accepts term fields ('name', 'slug',
- *                                                'term_group', 'term_id', 'id', 'description'), 'count' for term
- *                                                taxonomy count, 'include' to match the 'order' of the $include param,
- *                                                'meta_value', 'meta_value_num', the value of `$meta_key`, the array
- *                                                keys of `$meta_query`, or 'none' to omit the ORDER BY clause.
- *                                                Defaults to 'name'.
- *     @type string       $order                  Whether to order terms in ascending or descending order.
- *                                                Accepts 'ASC' (ascending) or 'DESC' (descending).
- *                                                Default 'ASC'.
- *     @type bool|int     $hide_empty             Whether to hide terms not assigned to any posts. Accepts
- *                                                1|true or 0|false. Default 1|true.
- *     @type array|string $include                Array or comma/space-separated string of term ids to include.
- *                                                Default empty array.
- *     @type array|string $exclude                Array or comma/space-separated string of term ids to exclude.
- *                                                If $include is non-empty, $exclude is ignored.
- *                                                Default empty array.
- *     @type array|string $exclude_tree           Array or comma/space-separated string of term ids to exclude
- *                                                along with all of their descendant terms. If $include is
- *                                                non-empty, $exclude_tree is ignored. Default empty array.
- *     @type int|string   $number                 Maximum number of terms to return. Accepts ''|0 (all) or any
- *                                                positive number. Default ''|0 (all).
- *     @type int          $offset                 The number by which to offset the terms query. Default empty.
- *     @type string       $fields                 Term fields to query for. Accepts 'all' (returns an array of complete
- *                                                term objects), 'ids' (returns an array of ids), 'id=>parent' (returns
- *                                                an associative array with ids as keys, parent term IDs as values),
- *                                                'names' (returns an array of term names), 'count' (returns the number
- *                                                of matching terms), 'id=>name' (returns an associative array with ids
- *                                                as keys, term names as values), or 'id=>slug' (returns an associative
- *                                                array with ids as keys, term slugs as values). Default 'all'.
- *     @type string|array $name                   Optional. Name or array of names to return term(s) for. Default empty.
- *     @type string|array $slug                   Optional. Slug or array of slugs to return term(s) for. Default empty.
- *     @type bool         $hierarchical           Whether to include terms that have non-empty descendants (even
- *                                                if $hide_empty is set to true). Default true.
- *     @type string       $search                 Search criteria to match terms. Will be SQL-formatted with
- *                                                wildcards before and after. Default empty.
- *     @type string       $name__like             Retrieve terms with criteria by which a term is LIKE $name__like.
- *                                                Default empty.
- *     @type string       $description__like      Retrieve terms where the description is LIKE $description__like.
- *                                                Default empty.
- *     @type bool         $pad_counts             Whether to pad the quantity of a term's children in the quantity
- *                                                of each term's "count" object variable. Default false.
- *     @type string       $get                    Whether to return terms regardless of ancestry or whether the terms
- *                                                are empty. Accepts 'all' or empty (disabled). Default empty.
- *     @type int          $child_of               Term ID to retrieve child terms of. If multiple taxonomies
- *                                                are passed, $child_of is ignored. Default 0.
- *     @type int|string   $parent                 Parent term ID to retrieve direct-child terms of. Default empty.
- *     @type bool         $childless              True to limit results to terms that have no children. This parameter
- *                                                has no effect on non-hierarchical taxonomies. Default false.
- *     @type string       $cache_domain           Unique cache key to be produced when this query is stored in an
- *                                                object cache. Default is 'core'.
- *     @type bool         $update_term_meta_cache Whether to prime meta caches for matched terms. Default true.
- *     @type array        $meta_query             Meta query clauses to limit retrieved terms by.
- *                                                See `WP_Meta_Query`. Default empty.
- *     @type string       $meta_key               Limit terms to those matching a specific metadata key. Can be used in
- *                                                conjunction with `$meta_value`. Default empty.
- *     @type string       $meta_value             Limit terms to those matching a specific metadata value. Usually used
- *                                                in conjunction with `$meta_key`. Default empty.
- *     @type string       $meta_type              Type of object metadata is for (e.g., comment, post, or user).
- *                                                Default empty.
- *     @type string       $meta_compare           Comparison operator to test the 'meta_value'. Default empty.
- *     @type bool         $suppress_filter        Whether to suppress the {@see 'get_terms'} filter. Default false.
- * }
- * @param array $deprecated Argument array, when using the legacy function parameter format. If present, this
- *                          parameter will be interpreted as `$args`, and the first function parameter will
- *                          be parsed as a taxonomy or array of taxonomies.
+ * @param string|array $args       Optional. Array or string of arguments. See WP_Term_Query::__construct()
+ *                                 for information on accepted arguments. Default empty.
+ * @param array        $deprecated Argument array, when using the legacy function parameter format. If present, this
+ *                                 parameter will be interpreted as `$args`, and the first function parameter will
+ *                                 be parsed as a taxonomy or array of taxonomies.
  * @return array|int|WP_Error List of WP_Term instances and their children. Will return WP_Error, if any of $taxonomies
  *                            do not exist.
  */
@@ -1294,6 +1254,27 @@ function update_termmeta_cache( $term_ids ) {
 	}
 
 	return update_meta_cache( 'term', $term_ids );
+}
+
+/**
+ * Get all meta data, including meta IDs, for the given term ID.
+ *
+ * @since 4.9.0
+ *
+ * @global wpdb $wpdb WordPress database abstraction object.
+ *
+ * @param int $term_id Term ID.
+ * @return array|false Array with meta data, or false when the meta table is not installed.
+ */
+function has_term_meta( $term_id ) {
+	// Bail if term meta table is not installed.
+	if ( get_option( 'db_version' ) < 34370 ) {
+		return false;
+	}
+
+	global $wpdb;
+
+	return $wpdb->get_results( $wpdb->prepare( "SELECT meta_key, meta_value, meta_id, term_id FROM $wpdb->termmeta WHERE term_id = %d ORDER BY meta_key,meta_id", $term_id ), ARRAY_A );
 }
 
 /**
@@ -1851,7 +1832,7 @@ function wp_delete_term( $term, $taxonomy, $args = array() ) {
  *
  * @since 2.0.0
  *
- * @param int $cat_ID
+ * @param int $cat_ID Category term ID.
  * @return bool|int|WP_Error Returns true if completes delete action; false if term doesn't exist;
  * 	Zero on attempted deletion of default Category; WP_Error object is also a possibility.
  */
@@ -1897,10 +1878,30 @@ function wp_get_object_terms($object_ids, $taxonomies, $args = array()) {
 
 	$args = wp_parse_args( $args );
 
+	/*
+	 * When one or more queried taxonomies is registered with an 'args' array,
+	 * those params override the `$args` passed to this function.
+	 */
+	$terms = array();
+	if ( count( $taxonomies ) > 1 ) {
+		foreach ( $taxonomies as $index => $taxonomy ) {
+			$t = get_taxonomy( $taxonomy );
+			if ( isset( $t->args ) && is_array( $t->args ) && $args != array_merge( $args, $t->args ) ) {
+				unset( $taxonomies[ $index ] );
+				$terms = array_merge( $terms, wp_get_object_terms( $object_ids, $taxonomy, array_merge( $args, $t->args ) ) );
+			}
+		}
+	} else {
+		$t = get_taxonomy( $taxonomies[0] );
+		if ( isset( $t->args ) && is_array( $t->args ) ) {
+			$args = array_merge( $args, $t->args );
+		}
+	}
+
 	$args['taxonomy'] = $taxonomies;
 	$args['object_ids'] = $object_ids;
 
-	$terms = get_terms( $args );
+	$terms = array_merge( $terms, get_terms( $args ) );
 
 	/**
 	 * Filters the terms for a given object or objects.
@@ -2338,6 +2339,7 @@ function wp_set_object_terms( $object_id, $terms, $taxonomy, $append = false ) {
 	}
 
 	wp_cache_delete( $object_id, $taxonomy . '_relationships' );
+	wp_cache_delete( 'last_changed', 'terms' );
 
 	/**
 	 * Fires after an object's terms have been set.
@@ -2432,6 +2434,7 @@ function wp_remove_object_terms( $object_id, $terms, $taxonomy ) {
 		$deleted = $wpdb->query( $wpdb->prepare( "DELETE FROM $wpdb->term_relationships WHERE object_id = %d AND term_taxonomy_id IN ($in_tt_ids)", $object_id ) );
 
 		wp_cache_delete( $object_id, $taxonomy . '_relationships' );
+		wp_cache_delete( 'last_changed', 'terms' );
 
 		/**
 		 * Fires immediately after an object-term relationship is deleted.
@@ -3016,11 +3019,7 @@ function clean_term_cache($ids, $taxonomy = '', $clean_taxonomy = true) {
 
 	foreach ( $taxonomies as $taxonomy ) {
 		if ( $clean_taxonomy ) {
-			wp_cache_delete('all_ids', $taxonomy);
-			wp_cache_delete('get', $taxonomy);
-			delete_option("{$taxonomy}_children");
-			// Regenerate {$taxonomy}_children
-			_get_term_hierarchy($taxonomy);
+			clean_taxonomy_cache( $taxonomy );
 		}
 
 		/**
@@ -3037,6 +3036,31 @@ function clean_term_cache($ids, $taxonomy = '', $clean_taxonomy = true) {
 	}
 
 	wp_cache_set( 'last_changed', microtime(), 'terms' );
+}
+
+/**
+ * Clean the caches for a taxonomy.
+ *
+ * @since 4.9.0
+ *
+ * @param string $taxonomy Taxonomy slug.
+ */
+function clean_taxonomy_cache( $taxonomy ) {
+	wp_cache_delete( 'all_ids', $taxonomy );
+	wp_cache_delete( 'get', $taxonomy );
+
+	// Regenerate cached hierarchy.
+	delete_option( "{$taxonomy}_children" );
+	_get_term_hierarchy( $taxonomy );
+
+	/**
+	 * Fires after a taxonomy's caches have been cleaned.
+	 *
+	 * @since 4.9.0
+	 *
+	 * @param string $taxonomy Taxonomy slug.
+	 */
+	do_action( 'clean_taxonomy_cache', $taxonomy );
 }
 
 /**
@@ -3540,19 +3564,27 @@ function _split_shared_term( $term_id, $term_taxonomy_id, $record = true ) {
 				array( 'parent' => $new_term_id ),
 				array( 'term_taxonomy_id' => $child_tt_id )
 			);
-			clean_term_cache( $term_id, $term_taxonomy->taxonomy );
+			clean_term_cache( (int) $child_tt_id, '', false );
 		}
 	} else {
 		// If the term has no children, we must force its taxonomy cache to be rebuilt separately.
-		clean_term_cache( $new_term_id, $term_taxonomy->taxonomy );
+		clean_term_cache( $new_term_id, $term_taxonomy->taxonomy, false );
 	}
 
+	clean_term_cache( $term_id, $term_taxonomy->taxonomy, false );
+
+	/*
+	 * Taxonomy cache clearing is delayed to avoid race conditions that may occur when
+	 * regenerating the taxonomy's hierarchy tree.
+	 */
+	$taxonomies_to_clean = array( $term_taxonomy->taxonomy );
+
 	// Clean the cache for term taxonomies formerly shared with the current term.
-	$shared_term_taxonomies = $wpdb->get_row( $wpdb->prepare( "SELECT taxonomy FROM $wpdb->term_taxonomy WHERE term_id = %d", $term_id ) );
-	if ( $shared_term_taxonomies ) {
-		foreach ( $shared_term_taxonomies as $shared_term_taxonomy ) {
-			clean_term_cache( $term_id, $shared_term_taxonomy );
-		}
+	$shared_term_taxonomies = $wpdb->get_col( $wpdb->prepare( "SELECT taxonomy FROM $wpdb->term_taxonomy WHERE term_id = %d", $term_id ) );
+	$taxonomies_to_clean = array_merge( $taxonomies_to_clean, $shared_term_taxonomies );
+
+	foreach ( $taxonomies_to_clean as $taxonomy_to_clean ) {
+		clean_taxonomy_cache( $taxonomy_to_clean );
 	}
 
 	// Keep a record of term_ids that have been split, keyed by old term_id. See wp_get_split_term().
@@ -3833,8 +3865,9 @@ function wp_get_split_term( $old_term_id, $taxonomy ) {
  *
  * @since 4.4.0
  *
- * @param int $term_id
- * @return bool
+ * @param int $term_id Term ID.
+ * @return bool Returns false if a term is not shared between multiple taxonomies or
+ *              if splittng shared taxonomy terms is finished. 
  */
 function wp_term_is_shared( $term_id ) {
 	global $wpdb;
@@ -4049,7 +4082,7 @@ function get_the_taxonomies( $post = 0, $args = array() ) {
  * @since 2.5.0
  *
  * @param int|WP_Post $post Optional. Post ID or WP_Post object. Default is global $post.
- * @return array
+ * @return array An array of all taxonomy names for the given post.
  */
 function get_post_taxonomies( $post = 0 ) {
 	$post = get_post( $post );
